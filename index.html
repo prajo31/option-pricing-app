@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Option Pricing App — Binomial & Black–Scholes</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; }
+    label { display: block; margin-top: 8px; }
+    input, select { width: 150px; }
+    .row { display: flex; gap: 40px; flex-wrap: wrap; }
+    .results, .table-container {
+      margin-top: 20px; padding: 15px; border: 1px solid #ccc; border-radius: 6px;
+    }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+    th { background: #f0f0f0; }
+  </style>
+</head>
+<body>
+
+<h1>Option Pricing: Binomial vs Black–Scholes</h1>
+
+<div class="row">
+  <div>
+    <label>Option type
+      <select id="type">
+        <option value="call">Call</option>
+        <option value="put">Put</option>
+      </select>
+    </label>
+    <label>S₀ (spot) <input id="S0" type="number" value="100" step="0.01"></label>
+    <label>K (strike) <input id="K" type="number" value="100" step="0.01"></label>
+    <label>T (years) <input id="T" type="number" value="1" step="0.01"></label>
+  </div>
+
+  <div>
+    <label>r (annual, decimal) <input id="r" type="number" value="0.05" step="0.001"></label>
+    <label>σ (vol, decimal) <input id="sigma" type="number" value="0.2" step="0.001"></label>
+    <label>N (binomial steps) <input id="N" type="number" value="50" step="1"></label>
+    <label>
+      American?
+      <select id="american">
+        <option value="false">No (European)</option>
+        <option value="true">Yes (American)</option>
+      </select>
+    </label>
+  </div>
+</div>
+
+<button id="priceBtn" style="margin-top:15px;">Price option</button>
+
+<div class="results">
+  <p><strong>Black–Scholes price:</strong> <span id="bsPrice">-</span></p>
+  <p><strong>Binomial price:</strong> <span id="binPrice">-</span></p>
+  <p><strong>Difference (Binomial − BS):</strong> <span id="diff">-</span></p>
+</div>
+
+<div class="table-container">
+  <h3>Convergence Table (European only)</h3>
+  <table id="convTable">
+    <thead>
+      <tr><th>N</th><th>Binomial Price</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<script>
+  // Normal CDF (Abramowitz-Stegun)
+  function normCDF(x) {
+    var a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741;
+    var a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+    var sign = x < 0 ? -1 : 1;
+    x = Math.abs(x) / Math.sqrt(2.0);
+    var t = 1.0 / (1.0 + p * x);
+    var y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+    return 0.5 * (1.0 + sign * y);
+  }
+
+  // Black–Scholes formula
+  function blackScholes(type, S0, K, T, r, sigma) {
+    var d1 = (Math.log(S0 / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * Math.sqrt(T));
+    var d2 = d1 - sigma * Math.sqrt(T);
+    if (type === "call") {
+      return S0 * normCDF(d1) - K * Math.exp(-r * T) * normCDF(d2);
+    } else {
+      return K * Math.exp(-r * T) * normCDF(-d2) - S0 * normCDF(-d1);
+    }
+  }
+
+  // CRR Binomial (European + American)
+  function binomialCRR(type, S0, K, T, r, sigma, N, american=false) {
+    var dt = T / N;
+    var u = Math.exp(sigma * Math.sqrt(dt));
+    var d = 1 / u;
+    var disc = Math.exp(-r * dt);
+    var p = (Math.exp(r * dt) - d) / (u - d);
+
+    var prices = [];
+    var payoffs = [];
+
+    // Terminal payoffs
+    for (var i = 0; i <= N; i++) {
+      var S = S0 * Math.pow(u, i) * Math.pow(d, N - i);
+      payoffs[i] = type === "call" ? Math.max(S - K, 0) : Math.max(K - S, 0);
+    }
+
+    // Backward induction
+    for (var step = N - 1; step >= 0; step--) {
+      for (var j = 0; j <= step; j++) {
+        var continuation = disc * (p * payoffs[j + 1] + (1 - p) * payoffs[j]);
+
+        if (american) {
+          var S = S0 * Math.pow(u, j) * Math.pow(d, step - j);
+          var exercise = type === "call" ? Math.max(S - K, 0) : Math.max(K - S, 0);
+          payoffs[j] = Math.max(continuation, exercise);
+        } else {
+          payoffs[j] = continuation;
+        }
+      }
+    }
+    return payoffs[0];
+  }
+
+  // Convergence table
+  function buildConvergenceTable(type, S0, K, T, r, sigma) {
+    var Ns = [5, 10, 25, 50, 100];
+    var tbody = document.querySelector("#convTable tbody");
+    tbody.innerHTML = "";
+
+    Ns.forEach(N => {
+      var price = binomialCRR(type, S0, K, T, r, sigma, N, false);
+      var row = `<tr><td>${N}</td><td>${price.toFixed(4)}</td></tr>`;
+      tbody.innerHTML += row;
+    });
+  }
+
+  // Main button
+  document.getElementById("priceBtn").addEventListener("click", function () {
+    var type = document.getElementById("type").value;
+    var S0 = parseFloat(document.getElementById("S0").value);
+    var K = parseFloat(document.getElementById("K").value);
+    var T = parseFloat(document.getElementById("T").value);
+    var r = parseFloat(document.getElementById("r").value);
+    var sigma = parseFloat(document.getElementById("sigma").value);
+    var N = parseInt(document.getElementById("N").value, 10);
+    var american = document.getElementById("american").value === "true";
+
+    var bs = blackScholes(type, S0, K, T, r, sigma);
+    var bin = binomialCRR(type, S0, K, T, r, sigma, N, american);
+    var diff = bin - bs;
+
+    document.getElementById("bsPrice").textContent = bs.toFixed(4);
+    document.getElementById("binPrice").textContent = bin.toFixed(4);
+    document.getElementById("diff").textContent = diff.toFixed(4);
+
+    buildConvergenceTable(type, S0, K, T, r, sigma);
+  });
+</script>
+
+</body>
+</html>
